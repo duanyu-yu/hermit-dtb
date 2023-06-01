@@ -276,6 +276,130 @@ impl<'a> Dtb<'a> {
 
         None
     }
+
+    fn get_addr_size_cells(&self, path: &str) -> Option<(u32, u32)> {
+        self.get_property(path, "#address-cells")
+            .and_then(|addr_cells| {
+                self.get_property(path, "#size-cells")
+                    .map(|size_cells| (addr_cells, size_cells))
+            })
+            .and_then(|(addr_cells, size_cells)| {
+                if addr_cells.len() == 4 && size_cells.len() == 4 {
+                    Some((
+                        u32::from_be_bytes(addr_cells.try_into().unwrap()),
+                        u32::from_be_bytes(size_cells.try_into().unwrap()),
+                    ))
+                } else {
+                    None
+                }
+            })
+    }
+
+    fn get_parent_path<'b>(&'b self, path: &'b str) -> Option<&str> {
+        let pos = path.rfind('/');
+
+        if pos == Some(0) {
+            return Some("/");
+        }
+
+        let parent_path = if let Some(pos) = pos {
+            &path[..pos]
+        } else {
+            ""
+        };
+
+        Some(parent_path).filter(|&parent_path| !parent_path.is_empty())
+    }
+
+    pub fn get_reg<'b>(&self, path: &str) -> RegIter<'a> {
+        assert_ne!(path, "/");
+
+        let parent_path = self.get_parent_path(path).unwrap();
+        let (addr_cells, size_cells) = self.get_addr_size_cells(parent_path).unwrap();
+        let reg = self.get_property(path, "reg").unwrap();
+
+        RegIter { 
+            reg_slice: reg, 
+            addr_cells, 
+            size_cells 
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum RegLength {
+    U32(u32),
+    U64(u64),
+}
+
+impl core::fmt::Display for RegLength {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            RegLength::U32(value) => write!(f, "{:#X}", value),
+            RegLength::U64(value) => write!(f, "{:#X}", value),
+        }
+    }
+}
+
+pub struct RegIter<'a> {
+    reg_slice: &'a [u8],
+    addr_cells: u32,
+    size_cells: u32,
+}
+
+impl<'a> Iterator for RegIter<'a> {
+    type Item = (RegLength, RegLength);
+
+    fn next(&mut self) -> Option<(RegLength, RegLength)> {
+        if self.reg_slice.is_empty() {
+            return None;
+        }
+
+        let start;
+        let size;
+
+        match self.addr_cells {
+            1 => {
+                let (slice, remaining) = self.reg_slice.split_at(mem::size_of::<u32>());
+                start = RegLength::U32(u32::from_be_bytes(slice.try_into().unwrap()));
+                self.reg_slice = remaining;
+            }
+            2 => {
+                let (slice, remaining) = self.reg_slice.split_at(mem::size_of::<u64>());
+                start = RegLength::U64(u64::from_be_bytes(slice.try_into().unwrap()));
+                self.reg_slice = remaining;
+            }
+            _ => {
+                panic!("Invalid #address-cells value {}", self.addr_cells);
+            }
+        }
+
+        match self.size_cells {
+            1 => {
+                let (slice, remaining) = self.reg_slice.split_at(mem::size_of::<u32>());
+                size = RegLength::U32(u32::from_be_bytes(slice.try_into().unwrap()));
+                self.reg_slice = remaining;
+            }
+            2 => {
+                let (slice, remaining) = self.reg_slice.split_at(mem::size_of::<u64>());
+                size = RegLength::U64(u64::from_be_bytes(slice.try_into().unwrap()));
+                self.reg_slice = remaining;
+            }
+            _ => {
+                panic!("Invalid #size-cells value {}", self.size_cells);
+            }
+        }
+
+        Some((start, size))
+
+        // TODO: Let the reg have arbitrary address and size cells.
+        // for _ in 0..self.addr_cells {
+        //     let (slice, remaining) = self.reg_slice.split_at(mem::size_of::<u32>());
+        //     let cell = u32::from_be_bytes(slice.try_into().unwrap());
+        //     [start, &[cell]].concat();
+        //     self.reg_slice = remaining;
+        // }
+    }
 }
 
 pub struct EnumSubnodesIter<'a, 'b> {

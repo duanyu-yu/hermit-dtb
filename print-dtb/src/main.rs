@@ -86,6 +86,10 @@ fn main() -> io::Result<()> {
 				println!("As string: \"{}\"", string);
 			}
 		}
+	} else if function == "get_reg" {
+		for (start, size) in dtb.get_reg(parameter1) {
+			println!("Start: {} Size: {}", start, size);
+		}
 	} else {
 		println!("Invalid function!");
 	}
